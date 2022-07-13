@@ -1,3 +1,5 @@
+# from exec import execute_block
+
 import json
 import os
 import socket
@@ -9,6 +11,10 @@ import html
 
 from collections import deque
 
+# TODO
+# factor out cell processing code
+# factor out do_execute code so it returns a values
+# APL magic can then use kernel code
 
 from ipykernel.kernelbase import Kernel
 from dyalog_kernel import __version__
@@ -263,6 +269,15 @@ class DyalogKernel(Kernel):
 
         self.dyalog_ride_connect()
 
+    def __del__(self):
+        pass
+        # turns out __del__ not guaranteed to run
+        # should try __exit__ and with in the caller?
+        # how is Jupyter supposed to kill kernel?
+        print("DESTROY KERNEL")
+        self.do_shutdown(0)
+        time.sleep(1)
+
     def recv_all(self, msg_len):
         msg = b''
         while msg_len:
@@ -333,128 +348,22 @@ class DyalogKernel(Kernel):
         self.dyalogTCP.sendall(_data)
         debug("SEND " + _data[8:].decode("utf-8"))
 
+
+
     def do_execute(self, code, silent, store_history=True, user_expressions=None,
                    allow_stdin=True):
         global SUSPEND
         code = code.strip()
-
         if not silent:
-            if self.connected:
-                lines = code.split('\n')
-                match = re.search('^%suspend\s+(\w+)$',lines[0].lower(), re.IGNORECASE)
-                nsmatch = re.match('^\\s*:namespace|:class|:interface',lines[0].lower())
-                if match:
-                    suspend = match.group(1)
-                    if suspend == 'on':
-                        SUSPEND = True
-                    elif suspend == 'off':
-                        SUSPEND = False
-                        self.ride_send(["GetSIStack", {}])
-                        self.ride_receive_wait()
-                        stack = dq.pop()[1].get('stack')
-                        if stack:
-                            self.execute_line("→\n" * len(stack))
-                            self.ride_receive_wait()
-                        dq.clear()
-                    else:
-                        self.out_error(
-                            'JUPYTER NOTEBOOK: UNDEFINED ARGUMENT TO %suspend, USE EITHER on OR off')
-                    lines = lines[1:]
-                elif re.match('^\\s*∇', lines[0]):
-                    if not re.match('\\s*∇$', lines[-1]):
-                        self.out_error('DEFN ERROR: Missing closing ∇')
-                    else:
-                        lines[0] = re.sub('^\\s*∇', '', lines[0])
-                        lines = lines[:-1]
-                        self.define_function(lines)
-                    lines = []
-                elif lines[0].lower() == ']dinput':
-                    self.define_function(lines[1:])
-                    lines = []                
-                elif nsmatch:
-                    if not re.match(":end"+re.sub("^\\s*:",'',nsmatch.group(0)),lines[-1].lower()):
-                        self.out_error("DEFN ERROR: No "+":End"+re.sub("^\\s*:",'',nsmatch.group(0)))
-                        lines = []
-                    else:
-                        self.define_function(lines)
-                        lines = []
-                try:
-                    # the windows interpreter can only handle ~125 chacaters at a time, so we do one line at a time
-                    for line in lines:
-                        line = line + '\n'
-                        self.execute_line(line)
+            [type, message] = execute_block(code)
+            {
+                'error': self.out_error(msg),
+                'result': self.out_result(msg),
+                'html': self.out_html(msg)
+            }[type]
 
-                        dq.clear()
-                        PROMPT_AVAILABLE = False
-                        err = False
-                        data_collection = ''
-
-                        # as long as we have queue dq or RIDE PROMPT is not available... do loop
-                        while (len(dq) > 0 or not PROMPT_AVAILABLE):
-
-                            received = ['', '']
-                            if len(dq) == 0:
-                                self.ride_receive_wait()
-
-                            received = dq.pop()
-
-                            if received[0] == 'AppendSessionOutput':
-                                if not PROMPT_AVAILABLE:
-                                    data_collection = data_collection + \
-                                        received[1].get('result')
-                            elif received[0] == 'SetPromptType':
-                                pt = received[1].get('type')
-                                if pt == 0:
-                                    PROMPT_AVAILABLE = False
-                                elif pt == 1:
-                                    PROMPT_AVAILABLE = True
-                                    if len(data_collection) > 0:
-                                        if err:
-                                            self.out_error(data_collection)
-                                        else:
-                                            self.out_result(data_collection)
-                                        data_collection = ''
-                                    err = False
-                                elif pt == 2:
-                                    self.execute_line("→\n")
-                                    raise ValueError(
-                                        'JUPYTER NOTEBOOK: Input through ⎕ is not supported')
-                                elif pt == 4:
-                                    time.sleep(1)
-                                    raise ValueError(
-                                        'JUPYTER NOTEBOOK: Input through ⍞ is not supported')
-
-                            elif received[0] == 'ShowHTML':
-                                self.out_html(received[1].get('html'))
-                            elif received[0] == 'HadError':
-                                # in case of error, set the flag err
-                                # it should be reset back to False only when prompt is available again.
-                                err = True
-                            # actually we don't want echo
-                            elif received[0] == 'OpenWindow':
-                                if not SUSPEND:
-                                    self.execute_line("→\n")
-                            elif received[0] == 'EchoInput':
-                                pass
-                            elif received[0] == 'OptionsDialog':
-                                self.ride_send(
-                                    ["ReplyOptionsDialog", {"index": -1, "token": received[1].get('token')}])
-                            # self.pa(received[1].get('input'))
-                except KeyboardInterrupt:
-                    self.ride_send(["StrongInterrupt", {}])
-                    if not SUSPEND:
-                        self.execute_line("→\n")
-                    self.out_error('INTERRUPT')
-                    self.ride_receive_wait()
-                    dq.clear()
-                except ValueError as err:
-                    self.out_error(str(err))
-                    self.ride_receive_wait()
-                    dq.clear()
-
-            else:
-                self.out_error('Dyalog APL not connected')
-
+        # TODO what is silent?
+        
         reply_content = {'status': 'ok',
                          # The base class increments the execution count
                          'execution_count': self.execution_count,
@@ -489,10 +398,14 @@ class DyalogKernel(Kernel):
 
     def do_shutdown(self, restart):
         # shutdown Dyalog executable only if Jupyter kernel has started it.
-
+        #import pdb; pdb.set_trace()
+        print("SHUTDOWN")
         if DYALOG_HOST == '127.0.0.1':
             if self.connected:
-                self.ride_send(["Exit", {"code": 0}])
+                print("shutting down")
+                # self.ride_send(["Exit", {"code": 0}]) # TODO there seems to be a issue with interpreter/RIDE protocol, Exit does not shutdown 'terp
+        self.execute_line("⎕off\n")
+        time.sleep(1)
          #   time.sleep(2)
          #   if self.dyalog_subprocess:
          #       self.dyalog_subprocess.kill()
@@ -500,3 +413,125 @@ class DyalogKernel(Kernel):
         self.dyalogTCP.close()
         self.connected = False
         return {'status': 'ok', 'restart': restart}
+
+
+    def execute_block(self, code):
+        print(code)
+        if not self.connected:
+            return ['error', "Dyalog APL not connected"]
+        else:
+            lines = code.split('\n')
+            match = re.search('^%suspend\s+(\w+)$',lines[0].lower(), re.IGNORECASE)
+            nsmatch = re.match('^\\s*:namespace|:class|:interface',lines[0].lower())
+            if match:
+                suspend = match.group(1)
+                if suspend == 'on':
+                    SUSPEND = True
+                elif suspend == 'off':
+                    SUSPEND = False
+                    self.ride_send(["GetSIStack", {}])
+                    self.ride_receive_wait()
+                    stack = dq.pop()[1].get('stack')
+                    if stack:
+                        self.execute_line("→\n" * len(stack))
+                        self.ride_receive_wait()
+                    dq.clear()
+                else:
+                    return ['error', 'JUPYTER NOTEBOOK: UNDEFINED ARGUMENT TO %suspend, USE EITHER on OR off']
+                lines = lines[1:]
+            elif re.match('^\\s*∇', lines[0]):
+                if not re.match('\\s*∇$', lines[-1]):
+                    return ['error', 'DEFN ERROR: Missing closing ∇']
+                else:
+                    lines[0] = re.sub('^\\s*∇', '', lines[0])
+                    lines = lines[:-1]
+                    self.define_function(lines)
+                lines = []
+            elif lines[0].lower() == ']dinput':
+                self.define_function(lines[1:])
+                lines = []                
+            elif nsmatch:
+                if not re.match(":end"+re.sub("^\\s*:",'',nsmatch.group(0)),lines[-1].lower()):
+                    lines = []
+                    return ['error', "DEFN ERROR: No "+":End"+re.sub("^\\s*:",'',nsmatch.group(0))]
+                else:
+                    self.define_function(lines)
+                    lines = []
+            try:
+                # the windows interpreter can only handle ~125 chacaters at a time, so we do one line at a time
+                for line in lines:
+                    line = line + '\n'
+                    self.execute_line(line)
+
+                    dq.clear()
+                    PROMPT_AVAILABLE = False
+                    err = False
+                    data_collection = ''
+
+                    # as long as we have queue dq or RIDE PROMPT is not available... do loop
+                    while (len(dq) > 0 or not PROMPT_AVAILABLE):
+
+                        received = ['', '']
+                        if len(dq) == 0:
+                            self.ride_receive_wait()
+
+                        received = dq.pop()
+
+                        if received[0] == 'AppendSessionOutput':
+                            if not PROMPT_AVAILABLE:
+                                data_collection = data_collection + \
+                                    received[1].get('result')
+                        elif received[0] == 'SetPromptType':
+                            pt = received[1].get('type')
+                            if pt == 0:
+                                PROMPT_AVAILABLE = False
+                            elif pt == 1:
+                                PROMPT_AVAILABLE = True
+                                if len(data_collection) > 0:
+                                    if err:
+                                        return ['error', data_collection]
+                                        # TODO check is "return" (i.e. exit) a bad idea?
+                                        # or should it be a return value assigned to
+                                        # result = [1, data_collection]
+                                        # and return result at very end?
+                                        # self.out_error(data_collection)
+                                    else:
+                                        return ['result', data_collection]
+                                    data_collection = ''
+                                err = False
+                            elif pt == 2:
+                                self.execute_line("→\n")
+                                raise ValueError(
+                                    'JUPYTER NOTEBOOK: Input through ⎕ is not supported')
+                            elif pt == 4:
+                                time.sleep(1)
+                                raise ValueError(
+                                    'JUPYTER NOTEBOOK: Input through ⍞ is not supported')
+
+                        elif received[0] == 'ShowHTML':
+                            return ['html', received[1].get('html')] # out_html
+                        elif received[0] == 'HadError':
+                            # in case of error, set the flag err
+                            # it should be reset back to False only when prompt is available again.
+                            err = True
+                        # actually we don't want echo
+                        elif received[0] == 'OpenWindow':
+                            if not SUSPEND:
+                                self.execute_line("→\n")
+                        elif received[0] == 'EchoInput':
+                            pass
+                        elif received[0] == 'OptionsDialog':
+                            self.ride_send(
+                                ["ReplyOptionsDialog", {"index": -1, "token": received[1].get('token')}])
+                        # self.pa(received[1].get('input'))
+            except KeyboardInterrupt:
+                self.ride_send(["StrongInterrupt", {}])
+                if not SUSPEND:
+                    self.execute_line("→\n")
+                self.ride_receive_wait()
+                dq.clear()
+                return ['error', 'INTERRUPT']
+            except ValueError as err:
+                self.ride_receive_wait()
+                dq.clear()
+                return ['error', str(err)]
