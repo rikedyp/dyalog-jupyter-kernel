@@ -12,6 +12,7 @@ import html
 from collections import deque
 
 # TODO
+# If 4502 not available, try another port
 # factor out cell processing code
 # factor out do_execute code so it returns a values
 # APL magic can then use kernel code
@@ -403,9 +404,10 @@ class DyalogKernel(Kernel):
         if DYALOG_HOST == '127.0.0.1':
             if self.connected:
                 print("shutting down")
-                # self.ride_send(["Exit", {"code": 0}]) # TODO there seems to be a issue with interpreter/RIDE protocol, Exit does not shutdown 'terp
-        self.execute_line("⎕off\n")
-        time.sleep(1)
+                self.ride_send(["Exit", {"code": 0}]) # TODO there seems to be a issue with interpreter/RIDE protocol, Exit does not shutdown 'terp
+                time.sleep(1)
+        # self.execute_line("⎕off\n")
+        
          #   time.sleep(2)
          #   if self.dyalog_subprocess:
          #       self.dyalog_subprocess.kill()
