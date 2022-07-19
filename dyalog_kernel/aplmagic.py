@@ -8,10 +8,8 @@ from ipykernel.kernelbase import Kernel
 
 # TODO simply include aplmagic as a python module in setup.py
 # TODO assignment / no printed result causes TypeError
-# ÷0
 # {∇⍵}⍬
 # TODO closing kernel does not kill 'terp
-# TODO return <pre> from thingamabob...
 
 from IPython.core.magic import (Magics, magics_class, line_cell_magic)
 
@@ -37,6 +35,9 @@ class APL(Magics):
 
 def load_ipython_extension(ipython):
     ipython.register_magics(APL)
+
+def unload_ipython_extension(ipython):
+    pass
 
 def hello():
     print("OK")
