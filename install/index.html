@@ -286,6 +286,13 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#pip-is-not-found" class="md-nav__link">
+    Pip is not found
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#cannot-assign-requsted-address" class="md-nav__link">
     Cannot assign requsted address
   </a>
@@ -400,6 +407,13 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#pip-is-not-found" class="md-nav__link">
+    Pip is not found
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#cannot-assign-requsted-address" class="md-nav__link">
     Cannot assign requsted address
   </a>
@@ -449,7 +463,7 @@
 <p><code>pip install jupyter</code></p>
 </li>
 <li>
-<p>Download the Dyalog Jupyter kernel repository as a zip: Click <a href="https://github.com/Dyalog/dyalog-jupyter-kernel/archive/master.zip">here</a> to do so.</p>
+<p>Click to <a href="https://github.com/Dyalog/dyalog-jupyter-kernel/archive/master.zip">download the Dyalog Jupyter kernel repository as a zip</a>.</p>
 </li>
 <li>After downloading, extract the contents and open the <em>dyalog-jupyter-kernel-master</em> directory.</li>
 <li>
@@ -464,16 +478,21 @@
 <div class="highlight"><pre><span></span><code>cd /path/to/my/notebooks
 </code></pre></div>
 <p>Then start the Jupyter notebook system:</p>
-<div class="highlight"><pre><span></span><code>jupyter notebook
+<div class="highlight"><pre><span></span><code>python -m notebook
 </code></pre></div>
 <p>Jupyter Notebook uses a web interface. It has a drop-down button labeled <em>New▾</em> where you can choose to create a new Dyalog APL notebook. You can also navigate to and click on any existing notebook (a file with the <code>.ipynb</code> extension) to open it.</p>
 <h2 id="troubleshooting">Troubleshooting</h2>
 <h3 id="python-is-not-found">Python is not found</h3>
 <blockquote>
-<p>If you get the message
+<p>Python is not always available on the PATH on Microsoft Windows after installation. If you get the message
 <div class="highlight"><pre><span></span><code>python : The term &#39;python&#39; is not recognized as the name of a cmdlet, function,  script file, or operable program.
 </code></pre></div>
-Run the installer again. Make sure to tick <strong>Add Python to environment variables</strong></p>
+Run the installer again and click <strong>Modify</strong>. Make sure to tick <strong>Add Python to environment variables</strong></p>
+</blockquote>
+<h3 id="pip-is-not-found">Pip is not found</h3>
+<blockquote>
+<p>If you are using at least Python 3.4, you can use <code>ensurepip</code>.<br />
+<code>python -m ensurepip</code></p>
 </blockquote>
 <h3 id="cannot-assign-requsted-address">Cannot assign requsted address</h3>
 <blockquote>
