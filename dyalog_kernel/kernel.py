@@ -334,115 +334,151 @@ class DyalogKernel(Kernel):
         self.dyalogTCP.sendall(_data)
         debug("SEND " + _data[8:].decode("utf-8"))
 
-    def do_execute(self, code, silent, store_history=True, user_expressions=None,
-                   allow_stdin=True):
+    def do_execute(self,
+        code,
+        silent,
+        store_history    = True,
+        user_expressions = None,
+        allow_stdin      = True
+    ):
         global SUSPEND
         code = code.strip()
 
         if not silent:
             if self.connected:
-                lines = code.split('\n')
-                # match = re.search('^%suspend\s+(\w+)$',lines[0].lower(), re.IGNORECASE)
-                # nsmatch = re.match('^\\s*:namespace|:class|:interface',lines[0].lower())
-                # if match:
-                    # suspend = match.group(1)
-                    # if suspend == 'on':
-                        # SUSPEND = True
-                    # elif suspend == 'off':
-                        # SUSPEND = False
-                        # self.ride_send(["GetSIStack", {}])
-                        # self.ride_receive_wait()
-                        # stack = dq.pop()[1].get('stack')
-                        # if stack:
-                            # self.execute_line("→\n" * len(stack))
-                            # self.ride_receive_wait()
-                        # dq.clear()
-                    # else:
-                        # self.out_error(
-                            # 'JUPYTER NOTEBOOK: UNDEFINED ARGUMENT TO %suspend, USE EITHER on OR off')
-                    # lines = lines[1:]
-                # elif re.match('^\\s*∇', lines[0]):
-                    # if not re.match('\\s*∇$', lines[-1]):
-                        # self.out_error('DEFN ERROR: Missing closing ∇')
-                    # else:
-                        # lines[0] = re.sub('^\\s*∇', '', lines[0])
-                        # lines = lines[:-1]
-                        # self.define_function(lines)
-                    # lines = []
-                if lines[0].lower() == ']dinput':
-                    print("DINPUT")
-                    self.define_function(lines[1:])
-                    lines = []                
-                # elif nsmatch:
-                    # if not re.match(":end"+re.sub("^\\s*:",'',nsmatch.group(0)),lines[-1].lower()):
-                        # self.out_error("DEFN ERROR: No "+":End"+re.sub("^\\s*:",'',nsmatch.group(0)))
-                        # lines = []
-                    # else:
-                        # self.define_function(lines)
-                        # lines = []
                 try:
                     # the windows interpreter can only handle ~125 chacaters at a time, so we do one line at a time
+                    # TODO: when the kernel is known to have a ≥19.0 interpreter, most of this can go away as the multiline stuff can all be handled by the interpreter
+                    lines            = code.split('\n') # lines in a cell
+                    multiline        = []               # cluster of lines defining a multiline function
+                    MULTILINE_NONE   = 0;
+                    MULTILINE_DFN    = 1;
+                    MULTILINE_TRADFN = 2;
+                    MULTILINE_OO     = 3;
+                    multiline_type   = MULTILINE_NONE # are we processing a multiline chunk, and is it a dfn or tradfn
+                    dfn_depth        = 0              # depth of squirly braces in a multiline chunk
+                    did_execute      = False          # did we do execution this loop
+                    oo_type          = None           # 'namespace', 'interface', or 'class'
                     for line in lines:
-                        line = line + '\n'
-                        self.execute_line(line)
-                                          
+                        dfn_depth += line.count('{') - line.count('}')
+                        suspend_search = re.search(
+                            '^%suspend\s+(\w+)$',
+                            line.lower(),
+                            re.IGNORECASE
+                        )
+                        if suspend_search:
+                            on_off = suspend_search.group(1)
+                            if on_off == 'on':
+                                SUSPEND = True
+                            elif on_off == 'off':
+                                SUSPEND = False
+                                self.ride_send(["GetSIStack", {}])
+                                self.ride_receive_wait()
+                                stack = dq.pop()[1].get('stack')
+                                if stack:
+                                    self.execute_line("→\n" * len(stack))
+                                    self.ride_receive_wait()
+                                dq.clear()
+                            else:
+                                self.out_error('JUPYTER NOTEBOOK: UNDEFINED ARGUMENT TO %suspend, USE EITHER on OR off')
+                        elif multiline_type == MULTILINE_NONE:
+                            oo_search = re.search(
+                                r'^\s*:(namespace|class|interface)',
+                                line.lower()
+                            )
+                            if oo_search:
+                                multiline_type = MULTILINE_OO
+                                multiline.append(line)
+                                oo_type = oo_search.group(1)
+                            elif line.strip().lower() == ']dinput': # for backwards compatibility with notebooks which use ]dinput for multiline stuff
+                                pass
+                            elif dfn_depth > 0: # if multiline dfn begins on this line
+                                multiline_type = MULTILINE_DFN
+                                multiline.append(line)
+                            elif line.strip().startswith('∇'): # if tradfn begins on this line
+                                multiline_type = MULTILINE_TRADFN
+                                multiline.append(line)
+                            else:
+                                self.execute_line(line + '\n')
+                                did_execute = True
+                        elif multiline_type == MULTILINE_OO:
+                            multiline.append(line)
+                            # if the namespace/class/interface ended
+                            if re.match(
+                                ':end' + oo_type,
+                                line.lower()
+                            ):
+                                self.define_function(multiline)
+                                multiline      = []
+                                multiline_type = MULTILINE_NONE
+                        elif multiline_type == MULTILINE_DFN:
+                            multiline.append(line)
+                            if dfn_depth <= 0: # if dfn ended
+                                self.define_function(multiline)
+                                multiline      = []
+                                multiline_type = MULTILINE_NONE
+                        else: # multiline_type == MULTILINE_TRADFN
+                            multiline.append(line)
+                            if line.strip() == '∇': # if tradfn ended
+                                self.define_function(multiline)
+                                multiline      = []
+                                multiline_type = MULTILINE_NONE
 
-                    dq.clear()
-                    PROMPT_AVAILABLE = False
-                    err = False
-                    data_collection = ''
+                        # if there was any execution, process responses from interpreter
+                        if did_execute:
+                            did_execute = False
 
-                    # as long as we have queue dq or RIDE PROMPT is not available... do loop
-                    while (len(dq) > 0 or not PROMPT_AVAILABLE):
+                            dq.clear()
+                            PROMPT_AVAILABLE = False
+                            err              = False
+                            data_collection  = ''
 
-                        received = ['', '']
-                        if len(dq) == 0:
-                            self.ride_receive_wait()
+                            # as long as we have queue dq or RIDE PROMPT is not available... do loop
+                            while (len(dq) > 0 or not PROMPT_AVAILABLE):
+                                received = ['', ''] # do we need this?
+                                # if there are no more messages to process, PROMPT_AVAILABLE must be false, so interpreter is still doing work`
+                                if len(dq) == 0: self.ride_receive_wait()
+                                received = dq.pop()
 
-                        received = dq.pop()
+                                if received[0] == 'AppendSessionOutput':
+                                    if not PROMPT_AVAILABLE:
+                                        data_collection = data_collection + received[1].get('result')
+                                elif received[0] == 'SetPromptType':
+                                    pt = received[1].get('type')
+                                    if pt == 0:
+                                        PROMPT_AVAILABLE = False
+                                    elif pt == 1:
+                                        PROMPT_AVAILABLE = True
+                                        if len(data_collection) > 0:
+                                            if err: self.out_error (data_collection)
+                                            else:   self.out_result(data_collection)
+                                            data_collection = ''
+                                        err = False
+                                    elif pt == 2:
+                                        self.execute_line("→\n")
+                                        raise ValueError('JUPYTER NOTEBOOK: Input through ⎕ is not supported')
+                                    elif pt == 4:
+                                        time.sleep(1)
+                                        raise ValueError('JUPYTER NOTEBOOK: Input through ⍞ is not supported')
 
-                        if received[0] == 'AppendSessionOutput':
-                            if not PROMPT_AVAILABLE:
-                                data_collection = data_collection + \
-                                    received[1].get('result')
-                        elif received[0] == 'SetPromptType':
-                            pt = received[1].get('type')
-                            if pt == 0:
-                                PROMPT_AVAILABLE = False
-                            elif pt == 1:
-                                PROMPT_AVAILABLE = True
-                                if len(data_collection) > 0:
-                                    if err:
-                                        self.out_error(data_collection)
-                                    else:
-                                        self.out_result(data_collection)
-                                    data_collection = ''
-                                err = False
-                            elif pt == 2:
-                                self.execute_line("→\n")
-                                raise ValueError(
-                                    'JUPYTER NOTEBOOK: Input through ⎕ is not supported')
-                            elif pt == 4:
-                                time.sleep(1)
-                                raise ValueError(
-                                    'JUPYTER NOTEBOOK: Input through ⍞ is not supported')
-
-                        elif received[0] == 'ShowHTML':
-                            self.out_html(received[1].get('html'))
-                        elif received[0] == 'HadError':
-                            # in case of error, set the flag err
-                            # it should be reset back to False only when prompt is available again.
-                            err = True
-                        # actually we don't want echo
-                        elif received[0] == 'OpenWindow':
-                            if not SUSPEND:
-                                self.execute_line("→\n")
-                        elif received[0] == 'EchoInput':
-                            pass
-                        elif received[0] == 'OptionsDialog':
-                            self.ride_send(
-                                ["ReplyOptionsDialog", {"index": -1, "token": received[1].get('token')}])
-                        # self.pa(received[1].get('input'))
+                                elif received[0] == 'ShowHTML':
+                                    self.out_html(received[1].get('html'))
+                                elif received[0] == 'HadError':
+                                    # in case of error, set the flag err
+                                    # it should be reset back to False only when prompt is available again.
+                                    err = True
+                                # actually we don't want echo
+                                elif received[0] == 'OpenWindow':
+                                    if not SUSPEND:
+                                        self.execute_line("→\n")
+                                elif received[0] == 'EchoInput':
+                                    pass
+                                elif received[0] == 'OptionsDialog':
+                                    self.ride_send(["ReplyOptionsDialog", {"index": -1, "token": received[1].get('token')}])
+                    if multiline_type != MULTILINE_NONE: # if there was an unterminated multiline thing
+                        if   multiline_type == MULTILINE_OO:     self.out_error('DEFN ERROR: No :End' + oo_type.capitalize())
+                        elif multiline_type == MULTILINE_DFN:    self.out_error('DEFN ERROR: Unclosed dfn, missing \'{\'')
+                        elif multiline_type == MULTILINE_TRADFN: self.out_error('DEFN ERROR: Unclosed tradfn, missing \'∇\'')
                 except KeyboardInterrupt:
                     self.ride_send(["StrongInterrupt", {}])
                     if not SUSPEND:
